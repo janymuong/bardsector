@@ -12,8 +12,7 @@ ane she ind a inst the th i his th it thassar mate the is the th whase in a bas
 wis ann ther the the innee thereng th the a you the ther ine hindend yrors thee
 ```
 
-It is not good Shakespeare. A net this small only learns letter patterns, and which is
-the joke.
+It is not good Shakespeare.
 
 
 ## The model
