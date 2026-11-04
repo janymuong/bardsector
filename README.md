@@ -33,8 +33,8 @@ next     = argmax_j ( logit[j] + noise )          noise from a 16-bit LCG
 
 ## Requirements
 
-| Tooling | for |
-|---|---|---|
+| Tooling | For |
+|---|---|
 | `nasm` | assembling the boot sector |
 | `make`, `python` | build and tooling |
 | `qemu-system-i386` | running the image |
