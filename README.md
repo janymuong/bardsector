@@ -12,7 +12,7 @@ ane she ind a inst the th i his th it thassar mate the is the th whase in a bas
 wis ann ther the the innee thereng th the a you the ther ine hindend yrors thee
 ```
 
-It is not good Shakespeare.
+It is not good Shakespeare :)
 
 
 ## The model
@@ -67,9 +67,9 @@ legacy/BIOS mode.
 ## Headless demo (no QEMU needed)
 
 ```
-python3 emu.py demo                         # 600 chars of free-running output
+python3 emu.py demo                           # 600 chars of free-running output
 python3 emu.py demo 400 "to be or not to be"  # type a prompt, then let it continue
-python3 emu.py size                         # code / weights / free-bytes breakdown
+python3 emu.py size                           # code / weights / free-bytes breakdown
 ```
 
 ## **Retrain it:**
@@ -91,7 +91,7 @@ Training takes under a minute. The weights must stay at 243 bytes
 
 ## Files
 
-| File | What it is |
+| File | What IT IS |
 |---|---|
 | `bardsector.asm` | the boot sector: keyboard, forward pass, sampling, printing |
 | `weights.inc` | generated 4-bit weight tables (E1, E2, W) |
