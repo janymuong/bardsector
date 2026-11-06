@@ -41,7 +41,7 @@ next     = argmax_j ( logit[j] + noise )          noise from a 16-bit LCG
 | `unicorn` | headless emulator tests |
 
 
-## **Setup (Arch):**
+## **Setup (archlinux):**
 ```
 sudo pacman -S nasm make python python-numpy qemu-system-x86 python-unicorn
 # or pip install unicorn or via virtual env - only needed for make test and emu.py demo
