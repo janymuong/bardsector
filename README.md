@@ -121,4 +121,8 @@ there are untested.
 
 ---
 
-**MORE**: Neuroevolution Snake. After that, Fake Shakespeare can get its own bigger version, since the boot sector is limited to letter patterns.
+## **MORE** / Also in this repo: SSSurvival of the Fittest
+
+`snake/` neuroevolution Snake in pure x86-64 assembly, where the
+evolution itself (selection and mutation of 64 tiny neural nets) runs in assembly too.
+See [snake/README.md](snake/README.md).
