@@ -121,7 +121,7 @@ there are untested.
 
 ---
 
-## **MORE** / Also in this repo: SSSurvival of the Fittest
+## **MORE** / ALSO IN THIS REPO: SSSurvival of the Fittest
 
 `snake/` neuroevolution Snake in pure x86-64 assembly, where the
 evolution itself (selection and mutation of 64 tiny neural nets) runs in assembly too.
