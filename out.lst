@@ -1,0 +1,235 @@
+     1                                  ; =============================================================================
+     2                                  ;   TO BOOT OR NOT TO BOOT
+     3                                  ;   a neural network that fits in a 512-byte boot sector and writes Shakespeare
+     4                                  ;
+     5                                  ;   No OS, no libc, no runtime. The BIOS loads this sector, and this sector
+     6                                  ;   *is* the language model: ~220 bytes of 16-bit x86 + 243 bytes of 4-bit weights.
+     7                                  ;
+     8                                  ;   The net (trained by train.py on ~1 MB of Shakespeare):
+     9                                  ;       h[k]     = ReLU( E1[prev][k] + E2[prev2][k] - 16 )       k = 0..5
+    10                                  ;       logit[j] = sum_k h[k] * W[j][k]                          j = 27 symbols
+    11                                  ;       next     = argmax_j ( logit[j] + noise )                 noise = PRNG
+    12                                  ;
+    13                                  ;   Type letters and the bard continues your thought.
+    14                                  ;
+    15                                  ;   build: nasm -f bin bardsector.asm -o bardsector.bin
+    16                                  ; =============================================================================
+    17                                  bits 16
+    18                                  org 0x7C00
+    19                                  
+    20                                  H       equ 0x7E00              ; 6 bytes of hidden activations, just past the sector
+    21                                  
+    22                                  start:
+    23 00000000 31C0                        xor     ax, ax
+    24 00000002 8ED8                        mov     ds, ax
+    25 00000004 8ED0                        mov     ss, ax
+    26 00000006 BC007C                      mov     sp, 0x7C00
+    27 00000009 FB                          sti                         ; hlt below needs interrupts on
+    28 0000000A B003                        mov     al, 3               ; 80x25 text mode (also clears the screen)
+    29 0000000C CD10                        int     0x10
+    30                                  
+    31 0000000E BE[CF00]                    mov     si, banner          ; title card
+    32 00000011 31DB                        xor     bx, bx              ; page 0 for the BIOS teletype
+    33 00000013 AC                      .b: lodsb
+    34 00000014 84C0                        test    al, al
+    35 00000016 7406                        jz      .go
+    36 00000018 B40E                        mov     ah, 0x0E
+    37 0000001A CD10                        int     0x10
+    38 0000001C EBF5                        jmp     .b
+    39                                  .go:
+    40 0000001E 30E4                        xor     ah, ah              ; seed the PRNG from the BIOS tick counter
+    41 00000020 CD1A                        int     0x1A
+    42 00000022 89D7                        mov     di, dx              ; di = PRNG state for the whole program
+    43 00000024 68[5C01]                    push    E2                  ; context lives on the stack as two row pointers:
+    44 00000027 68[0B01]                    push    E1                  ;   top = E1 row of prev char, next = E2 row of the one before
+    45                                  
+    46                                  gen:
+    47                                      ; ---- layer 1: embed the last two chars, add, ReLU ----------------------
+    48 0000002A 5E                          pop     si                  ; si -> E1 row (3 bytes = 6 nibbles)
+    49 0000002B 5B                          pop     bx                  ; bx -> E2 row
+    50 0000002C BD007E                      mov     bp, H
+    51 0000002F B103                        mov     cl, 3
+    52 00000031 AC                      .h: lodsb
+    53 00000032 D410                        aam     16                  ; al = low nibble, ah = high nibble
+    54 00000034 89C2                        mov     dx, ax
+    55 00000036 8A07                        mov     al, [bx]
+    56 00000038 43                          inc     bx
+    57 00000039 D410                        aam     16
+    58 0000003B 00D0                        add     al, dl              ; nibbles are stored as w+8, so the sum has +16 in it
+    59 0000003D 2C10                        sub     al, 16              ; subtract it; borrow means negative -> ReLU gives 0
+    60 0000003F 7302                        jnc     .p
+    61 00000041 30C0                        xor     al, al
+    62 00000043 00F4                    .p: add     ah, dh
+    63 00000045 80EC10                      sub     ah, 16
+    64 00000048 7302                        jnc     .q
+    65 0000004A 30E4                        xor     ah, ah
+    66 0000004C 894600                  .q: mov     [bp], ax            ; h[2m], h[2m+1]
+    67 0000004F 45                          inc     bp
+    68 00000050 45                          inc     bp
+    69 00000051 FEC9                        dec     cl
+    70 00000053 75DC                        jnz     .h
+    71 00000055 56                          push    si                  ; = E1 row + 3, used to shift the context below
+    72                                  
+    73                                      ; ---- layer 2: 27 logits, add noise, keep the best as (score<<5 | symbol) ----
+    74 00000056 BE[AD01]                    mov     si, W
+    75 00000059 B51A                        mov     ch, 26              ; symbol number, counts down; W rows are stored z..space
+    76 0000005B 31D2                        xor     dx, dx              ; dx = best key so far
+    77                                  .row:
+    78 0000005D BB007E                      mov     bx, H
+    79 00000060 31ED                        xor     bp, bp              ; bp = dot product accumulator
+    80 00000062 B103                        mov     cl, 3
+    81                                  .dot:
+    82 00000064 AC                          lodsb
+    83 00000065 D410                        aam     16
+    84 00000067 50                          push    ax
+    85 00000068 F627                        mul     byte [bx]           ; low nibble  * h[2m]
+    86 0000006A 01C5                        add     bp, ax
+    87 0000006C 58                          pop     ax
+    88 0000006D 88E0                        mov     al, ah
+    89 0000006F F66701                      mul     byte [bx+1]         ; high nibble * h[2m+1]
+    90 00000072 01C5                        add     bp, ax
+    91 00000074 83C302                      add     bx, 2
+    92 00000077 FEC9                        dec     cl
+    93 00000079 75E9                        jnz     .dot
+    94 0000007B 69FF5562                    imul    di, di, 25173       ; PRNG: 16-bit LCG, full period
+    95 0000007F 81C71936                    add     di, 13849
+    96 00000083 89F8                        mov     ax, di
+    97 00000085 C1E80A                      shr     ax, 10              ; 6 bits of noise: this is the "temperature"
+    98 00000088 01E8                        add     ax, bp
+    99 0000008A C1E005                      shl     ax, 5
+   100 0000008D 08E8                        or      al, ch              ; low 5 bits carry the symbol
+   101 0000008F 39D0                        cmp     ax, dx
+   102 00000091 7602                        jbe     .no
+   103 00000093 89C2                        mov     dx, ax
+   104 00000095 FECD                    .no:dec     ch
+   105 00000097 79C4                        jns     .row
+   106                                  
+   107 00000099 88D1                        mov     cl, dl
+   108 0000009B 80E11F                      and     cl, 31              ; cl = the net's choice
+   109                                  
+   110                                      ; ---- keyboard: a typed key overrides the choice (folded to 5 bits) -----
+   111 0000009E B401                        mov     ah, 1
+   112 000000A0 CD16                        int     0x16
+   113 000000A2 7408                        jz      .nk
+   114 000000A4 30E4                        xor     ah, ah
+   115 000000A6 CD16                        int     0x16
+   116 000000A8 241F                        and     al, 31              ; space -> 0, a..z -> 1..26 (so do A..Z)
+   117 000000AA 88C1                        mov     cl, al
+   118                                  .nk:
+   119                                      ; ---- print it -----------------------------------------------------------
+   120 000000AC 88C8                        mov     al, cl
+   121 000000AE 84C0                        test    al, al
+   122 000000B0 7502                        jnz     .nz
+   123 000000B2 B0C0                        mov     al, 0xC0            ; 0xC0 + 0x60 wraps to 0x20 = space
+   124 000000B4 0460                    .nz:add     al, 0x60            ; 1..26 -> 'a'..'z'
+   125 000000B6 B40E                        mov     ah, 0x0E
+   126 000000B8 31DB                        xor     bx, bx
+   127 000000BA CD10                        int     0x10
+   128                                  
+   129                                      ; ---- shift the context: prev2 <- prev, prev <- this --------------------
+   130 000000BC 58                          pop     ax                  ; E1 row of prev, + 3
+   131 000000BD 83C04E                      add     ax, E2 - E1 - 3     ; same row in the E2 table
+   132 000000C0 50                          push    ax
+   133 000000C1 88C8                        mov     al, cl
+   134 000000C3 B403                        mov     ah, 3
+   135 000000C5 F6E4                        mul     ah                  ; ax = 3 * symbol
+   136 000000C7 05[0B01]                    add     ax, E1
+   137 000000CA 50                          push    ax
+   138 000000CB F4                          hlt                         ; sleep until the next timer tick (~55 ms): typewriter pace
+   139 000000CC E95BFF                      jmp     gen
+   140                                  
+   141 000000CF 544F20424F4F542C20-     banner: db "TO BOOT, OR NOT TO BOOT:", 13, 10, 0
+   141 000000D8 4F52204E4F5420544F-
+   141 000000E1 20424F4F543A0D0A00 
+   142                                  
+   143 000000EA 00<rep 21h>                 times (510 - 243) - ($ - $$) db 0
+   144                                  %include "weights.inc"
+     1                              <1> ; generated by train.py - do not edit
+     2                              <1> ; E1/E2: one row per symbol (0=space, 1..26=a..z), 3 bytes each.
+     3                              <1> ; W: rows stored in REVERSE symbol order (z first) so the asm can count down.
+     4                              <1> 
+     5                              <1> E1:
+     6 0000010B 112F11              <1>     db 0x11, 0x2F, 0x11    ; space
+     7 0000010E 91C921              <1>     db 0x91, 0xC9, 0x21    ; a
+     8 00000111 1143F1              <1>     db 0x11, 0x43, 0xF1    ; b
+     9 00000114 A825AE              <1>     db 0xA8, 0x25, 0xAE    ; c
+    10 00000117 7E41A8              <1>     db 0x7E, 0x41, 0xA8    ; d
+    11 0000011A 25E161              <1>     db 0x25, 0xE1, 0x61    ; e
+    12 0000011D 8D5AD6              <1>     db 0x8D, 0x5A, 0xD6    ; f
+    13 00000120 BB23AC              <1>     db 0xBB, 0x23, 0xAC    ; g
+    14 00000123 3E2BC6              <1>     db 0x3E, 0x2B, 0xC6    ; h
+    15 00000126 90D811              <1>     db 0x90, 0xD8, 0x11    ; i
+    16 00000129 D222FA              <1>     db 0xD2, 0x22, 0xFA    ; j
+    17 0000012C 3D1583              <1>     db 0x3D, 0x15, 0x83    ; k
+    18 0000012F 5919C9              <1>     db 0x59, 0x19, 0xC9    ; l
+    19 00000132 1B1AF1              <1>     db 0x1B, 0x1A, 0xF1    ; m
+    20 00000135 95E1BD              <1>     db 0x95, 0xE1, 0xBD    ; n
+    21 00000138 F17761              <1>     db 0xF1, 0x77, 0x61    ; o
+    22 0000013B 1B09D1              <1>     db 0x1B, 0x09, 0xD1    ; p
+    23 0000013E F115F6              <1>     db 0xF1, 0x15, 0xF6    ; q
+    24 00000141 31A7E9              <1>     db 0x31, 0xA7, 0xE9    ; r
+    25 00000144 1F2154              <1>     db 0x1F, 0x21, 0x54    ; s
+    26 00000147 9F146C              <1>     db 0x9F, 0x14, 0x6C    ; t
+    27 0000014A A1DB40              <1>     db 0xA1, 0xDB, 0x40    ; u
+    28 0000014D 4F2AFF              <1>     db 0x4F, 0x2A, 0xFF    ; v
+    29 00000150 3A898C              <1>     db 0x3A, 0x89, 0x8C    ; w
+    30 00000153 2B24AA              <1>     db 0x2B, 0x24, 0xAA    ; x
+    31 00000156 DFF22F              <1>     db 0xDF, 0xF2, 0x2F    ; y
+    32 00000159 7A781F              <1>     db 0x7A, 0x78, 0x1F    ; z
+    33                              <1> E2:
+    34 0000015C B488AF              <1>     db 0xB4, 0x88, 0xAF    ; space
+    35 0000015F 3BC646              <1>     db 0x3B, 0xC6, 0x46    ; a
+    36 00000162 3D8EB0              <1>     db 0x3D, 0x8E, 0xB0    ; b
+    37 00000165 AF7AAA              <1>     db 0xAF, 0x7A, 0xAA    ; c
+    38 00000168 5C69B7              <1>     db 0x5C, 0x69, 0xB7    ; d
+    39 0000016B 4AC854              <1>     db 0x4A, 0xC8, 0x54    ; e
+    40 0000016E 7B8DF5              <1>     db 0x7B, 0x8D, 0xF5    ; f
+    41 00000171 2E7A5A              <1>     db 0x2E, 0x7A, 0x5A    ; g
+    42 00000174 9A9DE1              <1>     db 0x9A, 0x9D, 0xE1    ; h
+    43 00000177 6BD657              <1>     db 0x6B, 0xD6, 0x57    ; i
+    44 0000017A 158B88              <1>     db 0x15, 0x8B, 0x88    ; j
+    45 0000017D EFACCE              <1>     db 0xEF, 0xAC, 0xCE    ; k
+    46 00000180 5F6776              <1>     db 0x5F, 0x67, 0x76    ; l
+    47 00000183 6DBA75              <1>     db 0x6D, 0xBA, 0x75    ; m
+    48 00000186 7D7B96              <1>     db 0x7D, 0x7B, 0x96    ; n
+    49 00000189 0BE545              <1>     db 0x0B, 0xE5, 0x45    ; o
+    50 0000018C 5A7DD1              <1>     db 0x5A, 0x7D, 0xD1    ; p
+    51 0000018F 4824F5              <1>     db 0x48, 0x24, 0xF5    ; q
+    52 00000192 4D7A87              <1>     db 0x4D, 0x7A, 0x87    ; r
+    53 00000195 688AD5              <1>     db 0x68, 0x8A, 0xD5    ; s
+    54 00000198 7A78E8              <1>     db 0x7A, 0x78, 0xE8    ; t
+    55 0000019B 4CD846              <1>     db 0x4C, 0xD8, 0x46    ; u
+    56 0000019E 1AFB94              <1>     db 0x1A, 0xFB, 0x94    ; v
+    57 000001A1 AD0FF2              <1>     db 0xAD, 0x0F, 0xF2    ; w
+    58 000001A4 79A8A5              <1>     db 0x79, 0xA8, 0xA5    ; x
+    59 000001A7 FC789B              <1>     db 0xFC, 0x78, 0x9B    ; y
+    60 000001AA 6A8AA1              <1>     db 0x6A, 0x8A, 0xA1    ; z
+    61                              <1> W:
+    62 000001AD 103000              <1>     db 0x10, 0x30, 0x00    ; z
+    63 000001B0 277BD4              <1>     db 0x27, 0x7B, 0xD4    ; y
+    64 000001B3 303000              <1>     db 0x30, 0x30, 0x00    ; x
+    65 000001B6 C63C25              <1>     db 0xC6, 0x3C, 0x25    ; w
+    66 000001B9 929800              <1>     db 0x92, 0x98, 0x00    ; v
+    67 000001BC F748D5              <1>     db 0xF7, 0x48, 0xD5    ; u
+    68 000001BF BBCE03              <1>     db 0xBB, 0xCE, 0x03    ; t
+    69 000001C2 BBDD50              <1>     db 0xBB, 0xDD, 0x50    ; s
+    70 000001C5 C6CAD5              <1>     db 0xC6, 0xCA, 0xD5    ; r
+    71 000001C8 000500              <1>     db 0x00, 0x05, 0x00    ; q
+    72 000001CB 976A32              <1>     db 0x97, 0x6A, 0x32    ; p
+    73 000001CE 887BDC              <1>     db 0x88, 0x7B, 0xDC    ; o
+    74 000001D1 E6DB50              <1>     db 0xE6, 0xDB, 0x50    ; n
+    75 000001D4 C58C50              <1>     db 0xC5, 0x8C, 0x50    ; m
+    76 000001D7 B8ABA5              <1>     db 0xB8, 0xAB, 0xA5    ; l
+    77 000001DA 048909              <1>     db 0x04, 0x89, 0x09    ; k
+    78 000001DD 000500              <1>     db 0x00, 0x05, 0x00    ; j
+    79 000001E0 097DCC              <1>     db 0x09, 0x7D, 0xCC    ; i
+    80 000001E3 4A0C0F              <1>     db 0x4A, 0x0C, 0x0F    ; h
+    81 000001E6 10BA0A              <1>     db 0x10, 0xBA, 0x0A    ; g
+    82 000001E9 E76B00              <1>     db 0xE7, 0x6B, 0x00    ; f
+    83 000001EC 0BA8FB              <1>     db 0x0B, 0xA8, 0xFB    ; e
+    84 000001EF 07CA67              <1>     db 0x07, 0xCA, 0x67    ; d
+    85 000001F2 45BB06              <1>     db 0x45, 0xBB, 0x06    ; c
+    86 000001F5 664C40              <1>     db 0x66, 0x4C, 0x40    ; b
+    87 000001F8 298DDB              <1>     db 0x29, 0x8D, 0xDB    ; a
+    88 000001FB EFF0D0              <1>     db 0xEF, 0xF0, 0xD0    ; space
+   145 000001FE 55AA                        dw 0xAA55
