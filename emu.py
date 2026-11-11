@@ -21,11 +21,12 @@ BANNER = b"TO BOOT, OR NOT TO BOOT:\r\n"
 
 
 # --------------------------------------------------------------- reference --
-def reference(flat, nchars, seed, keys=b"", noise_shift=10):
+def reference(flat, nchars, seed, keys=b""):
     """Same arithmetic as the boot sector, in plain Python.
 
     flat = E1 (81 B) | E2 (81 B) | W (81 B, rows stored z..space), read straight
     out of the assembled image so the weights are exactly the shipped ones.
+    The noise added to every logit is r/1024 + r/2048 (1.5x a 6-bit value).
     """
     c1 = c2 = 0  # symbols; a typed key can make them 27..31, which just reads
     rng = seed & 0xFFFF  # on into the next table, exactly like the real thing
@@ -45,7 +46,7 @@ def reference(flat, nchars, seed, keys=b"", noise_shift=10):
                 b = flat[row + m]
                 acc += (b & 15) * h[2 * m] + (b >> 4) * h[2 * m + 1]
             rng = (rng * 25173 + 13849) & 0xFFFF
-            key = (((rng >> noise_shift) + acc) << 5 | s) & 0xFFFF
+            key = ((((rng >> 10) + (rng >> 11) + acc) << 5) | s) & 0xFFFF
             if key > best:
                 best = key
         sym = best & 31
